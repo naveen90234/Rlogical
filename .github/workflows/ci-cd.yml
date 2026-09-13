@@ -1,296 +1,11 @@
-name: CI/CD Pipeline — task-5-cicd
-
-# ────────────────────────────────────────────────────────────
-# IMPORTANT: This pipeline is scoped exclusively to the task-5-cicd/ directory.
-# Changes to any other folder (task-1-kubernetes/, task-2-nginx/, etc.)
-# will NOT trigger this workflow.
-#
-# Runner : rlogical-ec2-runner  (self-hosted)
-# Labels : ubuntu, ec2, rlogical
-# Branch : dev
-# Environment: dev
-# ─────────────────────────────────────────────────────────────
-
-on:
-  push:
-    branches:
-      - dev
-    paths:
-      - "task-5-cicd/**"
-      - ".github/**"
-
-  pull_request:
-    branches:
-      - dev
-    paths:
-      - "task-5-cicd/**"
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
-env:
-  NODE_VERSION: "20"
-  IMAGE_NAME: nodejs-todo-app
-  APP_PORT: 3000
-
-jobs:
-
   # ═══════════════════════════════════════════════════════════════════════════
-  # STAGE 1 — Application Preparation
-  # ═══════════════════════════════════════════════════════════════════════════
-  prepare:
-    name: "Stage 1 — App Preparation"
-    runs-on: [ubuntu, ec2, rlogical]
-    environment: dev
-
-    defaults:
-      run:
-        working-directory: task-5-cicd
-
-    steps:
-      - name: Checkout source code
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: task-5-cicd/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Run tests
-        run: npm test
-        env:
-          NODE_ENV: test
-
-
-  # ═══════════════════════════════════════════════════════════════════════════
-  # STAGE 2 — Code Quality (SonarQube)
+  # STAGE 6 — Deploy on GitHub Actions Runner
   #
-  # SonarQube is temporarily disabled because of the previous secret
-  # trailing-newline issue.
-  # ═══════════════════════════════════════════════════════════════════════════
-  code-quality:
-    name: "Stage 2 — Code Quality (SonarQube)"
-    runs-on: [ubuntu, ec2, rlogical]
-    environment: dev
-    needs: prepare
-
-    steps:
-      - name: Checkout source code
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          fetch-depth: 0
-
-      - name: SonarQube analysis skipped
-        run: |
-          echo "SonarQube scan is temporarily disabled."
-          echo "Reason: SONAR_HOST_URL / SONAR_TOKEN secrets previously"
-          echo "contained a trailing newline on the self-hosted runner."
-          echo "Re-enter both secrets cleanly in GitHub to re-enable."
-          echo "projectKey : Rlogical"
-          echo "SonarQube URL : http://3.106.56.33:9000"
-
-      # ── Re-enable these steps once SonarQube secrets are clean ────────────
-      #
-      # - name: SonarQube Scan
-      #   uses: SonarSource/sonarqube-scan-action@7006c4492b2e0ee0f816d36501671557c97f5995
-      #   with:
-      #     projectBaseDir: task-5-cicd
-      #     args: -Dsonar.host.url=http://3.106.56.33:9000
-      #   env:
-      #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-      #     SONAR_HOST_URL: http://3.106.56.33:9000
-      #
-      # - name: SonarQube Quality Gate check
-      #   uses: SonarSource/sonarqube-quality-gate-action@cf038b0e0cdecfa9e56c198bbb7d21d751d62c3b
-      #   timeout-minutes: 5
-      #   env:
-      #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-      #     SONAR_HOST_URL: http://3.106.56.33:9000
-
-
-  # ═══════════════════════════════════════════════════════════════════════════
-  # STAGE 3 — Docker Build
-  # ═══════════════════════════════════════════════════════════════════════════
-  docker-build:
-    name: "Stage 3 — Docker Build"
-    runs-on: [ubuntu, ec2, rlogical]
-    environment: dev
-    needs: prepare
-
-    outputs:
-      image-tag: ${{ steps.set-tag.outputs.image-tag }}
-
-    steps:
-      - name: Checkout source code
-        uses: actions/checkout@v4
-
-      - name: Generate image tag (short Git SHA)
-        id: set-tag
-        run: |
-          SHORT_SHA="${GITHUB_SHA::7}"
-          echo "image-tag=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
-          echo "Image tag: ${SHORT_SHA}"
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: task-5-cicd
-          file: task-5-cicd/Dockerfile
-          push: false
-          load: true
-          tags: |
-            ${{ env.IMAGE_NAME }}:${{ steps.set-tag.outputs.image-tag }}
-            ${{ env.IMAGE_NAME }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Save image to tarball
-        run: |
-          docker save "${{ env.IMAGE_NAME }}:${{ steps.set-tag.outputs.image-tag }}" \
-            -o /tmp/docker-image.tar
-
-      - name: Upload image tarball
-        uses: actions/upload-artifact@v4
-        with:
-          name: docker-image
-          path: /tmp/docker-image.tar
-          retention-days: 1
-
-
-  # ═══════════════════════════════════════════════════════════════════════════
-  # STAGE 4 — Container Security Scan (Trivy)
-  # exit-code 0 — generates report but never blocks the pipeline
-  # ═══════════════════════════════════════════════════════════════════════════
-  security-scan:
-    name: "Stage 4 — Security Scan (Trivy)"
-    runs-on: [ubuntu, ec2, rlogical]
-    environment: dev
-    needs: docker-build
-
-    steps:
-      - name: Download image tarball
-        uses: actions/download-artifact@v4
-        with:
-          name: docker-image
-          path: /tmp
-
-      - name: Load Docker image
-        run: docker load -i /tmp/docker-image.tar
-
-      - name: Run Trivy vulnerability scan
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: "${{ env.IMAGE_NAME }}:${{ needs.docker-build.outputs.image-tag }}"
-          format: table
-          output: trivy-results.txt
-          exit-code: "0"
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-
-      - name: Upload Trivy results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: trivy-scan-results
-          path: trivy-results.txt
-          retention-days: 7
-
-
-  # ═══════════════════════════════════════════════════════════════════════════
-  # STAGE 5 — Push to AWS ECR
-  #
-  # Runs only on push to dev.
-  # ═══════════════════════════════════════════════════════════════════════════
-  push-to-ecr:
-    name: "Stage 5 — Push to AWS ECR"
-    runs-on: [ubuntu, ec2, rlogical]
-    environment: dev
-    needs:
-      - code-quality
-      - security-scan
-
-    if: github.ref == 'refs/heads/dev' && github.event_name == 'push'
-
-    permissions:
-      id-token: write
-      contents: read
-
-    outputs:
-      ecr-registry: ${{ steps.ecr-login.outputs.registry }}
-      image-tag: ${{ steps.image-tag.outputs.image-tag }}
-
-    steps:
-      - name: Download image tarball
-        uses: actions/download-artifact@v4
-        with:
-          name: docker-image
-          path: /tmp
-
-      - name: Load Docker image
-        run: docker load -i /tmp/docker-image.tar
-
-      - name: Generate image tag
-        id: image-tag
-        run: |
-          SHORT_SHA="${GITHUB_SHA::7}"
-          echo "image-tag=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
-          echo "Image tag: ${SHORT_SHA}"
-
-      # ── Enable this if the runner does not already have AWS credentials ──
-      #
-      # - name: Configure AWS credentials via OIDC
-      #   uses: aws-actions/configure-aws-credentials@v4
-      #   with:
-      #     role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-      #     aws-region: ${{ secrets.AWS_REGION }}
-
-      - name: Log in to Amazon ECR
-        id: ecr-login
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Tag and push image to ECR
-        run: |
-          ECR_REGISTRY="${{ steps.ecr-login.outputs.registry }}"
-          ECR_REPO="${{ secrets.ECR_REPOSITORY }}"
-          IMAGE_TAG="${{ steps.image-tag.outputs.image-tag }}"
-
-          VERSIONED="${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}"
-          LATEST="${ECR_REGISTRY}/${ECR_REPO}:latest"
-
-          echo "[INFO] Tagging image..."
-          docker tag \
-            "${{ env.IMAGE_NAME }}:${IMAGE_TAG}" \
-            "${VERSIONED}"
-
-          docker tag \
-            "${{ env.IMAGE_NAME }}:${IMAGE_TAG}" \
-            "${LATEST}"
-
-          echo "[INFO] Pushing versioned image: ${VERSIONED}"
-          docker push "${VERSIONED}"
-
-          echo "[INFO] Pushing latest image: ${LATEST}"
-          docker push "${LATEST}"
-
-          echo "[INFO] Successfully pushed:"
-          echo "  ${VERSIONED}"
-          echo "  ${LATEST}"
-
-
-  # ═══════════════════════════════════════════════════════════════════════════
-  # STAGE 6 — Deploy to EC2
+  # No SSH / no remote VM connection.
+  # Docker runs directly on the self-hosted runner.
   # ═══════════════════════════════════════════════════════════════════════════
   deploy:
-    name: "Stage 6 — Deploy to EC2"
+    name: "Stage 6 — Deploy on Runner"
     runs-on: [ubuntu, ec2, rlogical]
     environment: dev
     needs: push-to-ecr
@@ -302,80 +17,82 @@ jobs:
       contents: read
 
     steps:
-      # - name: Configure AWS credentials via OIDC
-      #   uses: aws-actions/configure-aws-credentials@v4
-      #   with:
-      #     role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-      #     aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Log in to Amazon ECR
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Deploy to EC2 via SSH
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
-          port: 22
-          timeout: 120s
+      - name: Deploy Docker container on runner
+        shell: bash
+        run: |
+          set -euo pipefail
 
-          script: |
-            set -euo pipefail
+          ECR_REGISTRY="${{ steps.ecr-login.outputs.registry }}"
+          ECR_REPO="${{ secrets.ECR_REPOSITORY }}"
+          IMAGE_TAG="${{ needs.push-to-ecr.outputs.image-tag }}"
+          FULL_IMAGE="${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}"
 
-            ECR_REGISTRY="${{ steps.ecr-login.outputs.registry }}"
-            ECR_REPO="${{ secrets.ECR_REPOSITORY }}"
-            IMAGE_TAG="${{ needs.push-to-ecr.outputs.image-tag }}"
-            FULL_IMAGE="${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}"
+          CONTAINER_NAME="nodejs-todo-app-dev"
+          APP_PORT="${{ env.APP_PORT }}"
 
-            CONTAINER_NAME="nodejs-todo-app-dev"
-            APP_PORT="${{ env.APP_PORT }}"
+          echo "[INFO] ECR Registry: ${ECR_REGISTRY}"
+          echo "[INFO] ECR Repository: ${ECR_REPO}"
+          echo "[INFO] Image Tag: ${IMAGE_TAG}"
+          echo "[INFO] Full Image: ${FULL_IMAGE}"
 
-            echo "[INFO] ECR Registry: ${ECR_REGISTRY}"
-            echo "[INFO] ECR Repository: ${ECR_REPO}"
-            echo "[INFO] Image Tag: ${IMAGE_TAG}"
-            echo "[INFO] Full Image: ${FULL_IMAGE}"
+          echo "[INFO] Pulling image from ECR..."
+          docker pull "${FULL_IMAGE}"
 
-            echo "[INFO] Logging in to ECR..."
+          echo "[INFO] Removing existing container..."
+          docker rm -f "${CONTAINER_NAME}" 2>/dev/null || true
 
-            aws ecr get-login-password \
-              --region "${{ secrets.AWS_REGION }}" \
-              | docker login \
-                  --username AWS \
-                  --password-stdin "${ECR_REGISTRY}"
+          echo "[INFO] Checking whether port ${APP_PORT} is already in use..."
 
-            echo "[INFO] Pulling image: ${FULL_IMAGE}"
-            docker pull "${FULL_IMAGE}"
+          if sudo ss -ltnp | grep -q ":${APP_PORT} "; then
+            echo "[ERROR] Port ${APP_PORT} is already in use."
+            echo "[ERROR] Processes using port ${APP_PORT}:"
+            sudo ss -ltnp | grep ":${APP_PORT} " || true
 
-            echo "[INFO] Stopping existing container..."
-            docker stop "${CONTAINER_NAME}" 2>/dev/null || true
+            echo "[INFO] Docker containers:"
+            docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 
-            echo "[INFO] Removing existing container..."
-            docker rm "${CONTAINER_NAME}" 2>/dev/null || true
+            exit 1
+          fi
 
-            echo "[INFO] Starting updated container..."
+          echo "[INFO] Starting container..."
 
-            docker run -d \
-              --name "${CONTAINER_NAME}" \
-              --restart unless-stopped \
-              --env NODE_ENV=dev \
-              -p "${APP_PORT}:${APP_PORT}" \
-              "${FULL_IMAGE}"
+          docker run -d \
+            --name "${CONTAINER_NAME}" \
+            --restart unless-stopped \
+            --env NODE_ENV=dev \
+            -p "${APP_PORT}:${APP_PORT}" \
+            "${FULL_IMAGE}"
 
-            echo "[INFO] Waiting for container startup..."
-            sleep 10
+          echo "[INFO] Waiting for container startup..."
+          sleep 10
 
-            echo "[INFO] Container status:"
-            docker ps \
-              --filter "name=${CONTAINER_NAME}" \
-              --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+          echo "[INFO] Container status:"
+          docker ps \
+            --filter "name=${CONTAINER_NAME}" \
+            --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 
-            echo "[INFO] Deployment completed successfully."
+          echo "[INFO] Container logs:"
+          docker logs --tail 50 "${CONTAINER_NAME}"
+
+          echo "[INFO] Deployment completed successfully."
 
 
   # ═══════════════════════════════════════════════════════════════════════════
   # STAGE 7 — Health Check
+  #
+  # Health check runs directly on the same GitHub Actions runner.
+  # No EC2_HOST / SSH / remote connection required.
   # ═══════════════════════════════════════════════════════════════════════════
   health-check:
     name: "Stage 7 — Health Check"
@@ -386,32 +103,47 @@ jobs:
     if: github.ref == 'refs/heads/dev' && github.event_name == 'push'
 
     steps:
+
       - name: Wait for application startup
-        run: sleep 15
+        run: sleep 10
 
       - name: Poll application health endpoint
+        shell: bash
         run: |
-          URL="http://${{ secrets.EC2_HOST }}:${{ env.APP_PORT }}"
+          set -euo pipefail
+
+          URL="http://127.0.0.1:${{ env.APP_PORT }}"
           MAX_RETRIES=6
           RETRY_INTERVAL=10
-          attempt=1
 
           echo "[INFO] Health checking: ${URL}"
 
-          until curl --silent --fail --max-time 10 "${URL}"; do
+          for ((attempt=1; attempt<=MAX_RETRIES; attempt++)); do
 
-            if [[ "${attempt}" -ge "${MAX_RETRIES}" ]]; then
-              echo "[ERROR] Health check failed after ${MAX_RETRIES} attempts."
-              exit 1
+            if curl --silent --fail --max-time 10 "${URL}"; then
+              echo
+              echo "[INFO] Health check passed."
+              echo "[INFO] Application is live at ${URL}"
+              exit 0
             fi
 
             echo "[WARN] Attempt ${attempt}/${MAX_RETRIES} failed."
-            echo "[WARN] Retrying in ${RETRY_INTERVAL}s..."
 
-            attempt=$((attempt + 1))
-            sleep "${RETRY_INTERVAL}"
+            if [[ "${attempt}" -lt "${MAX_RETRIES}" ]]; then
+              echo "[WARN] Retrying in ${RETRY_INTERVAL}s..."
+              sleep "${RETRY_INTERVAL}"
+            fi
 
           done
 
-          echo "[INFO] Health check passed."
-          echo "[INFO] Application is live at ${URL}"
+          echo "[ERROR] Health check failed after ${MAX_RETRIES} attempts."
+
+          echo "[INFO] Docker container status:"
+          docker ps -a \
+            --filter "name=nodejs-todo-app-dev" \
+            --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+
+          echo "[INFO] Container logs:"
+          docker logs --tail 100 nodejs-todo-app-dev || true
+
+          exit 1
