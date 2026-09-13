@@ -250,7 +250,7 @@ jobs:
         run: |
           ECR_REGISTRY="${{ steps.ecr-login.outputs.registry }}"
           ECR_REPO="${{ secrets.ECR_REPOSITORY }}"
-          IMAGE_TAG="${{ needs.docker-build.outputs.image-tag }}"
+          IMAGE_TAG="latest"
 
           VERSIONED="${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}"
           LATEST="${ECR_REGISTRY}/${ECR_REPO}:latest"
