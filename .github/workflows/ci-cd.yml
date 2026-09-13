@@ -91,6 +91,19 @@ jobs:
           echo "SONAR_TOKEN_CLEAN=$(cat /tmp/sonar_token)" >> "$GITHUB_ENV"
           rm -f /tmp/sonar_token
 
+      - name: Clear cached sonar-scanner config (remove stale SONAR_HOST_URL)
+        run: |
+          # The cached scanner config file may contain the malformed URL from
+          # a previous run. Clear it so the scanner only reads our -D args.
+          SCANNER_CONF="/home/ubuntu/actions-runner/_work/_tool/sonar-scanner-cli/8.1.0.6389/linux-x64/conf/sonar-scanner.properties"
+          if [ -f "${SCANNER_CONF}" ]; then
+            sed -i '/sonar\.host\.url/d' "${SCANNER_CONF}"
+            sed -i '/SONAR_HOST_URL/d' "${SCANNER_CONF}"
+            echo "Cleared sonar.host.url from ${SCANNER_CONF}"
+          fi
+          # Also unset at process level to be safe
+          unset SONAR_HOST_URL || true
+
       - name: SonarQube Scan
         continue-on-error: true
         uses: SonarSource/sonarqube-scan-action@7006c4492b2e0ee0f816d36501671557c97f5995 # v8.1.0
