@@ -70,7 +70,8 @@ jobs:
 
   # ═══════════════════════════════════════════════════════════════════════════
   # STAGE 2 — Code Quality (SonarQube)
-  # Static analysis + Quality Gate check
+  # projectKey : Rlogical  (matches SonarQube server project)
+  # Action versions pinned to exact SHAs provided by SonarQube server setup
   # Secrets required: SONAR_TOKEN, SONAR_HOST_URL
   # ═══════════════════════════════════════════════════════════════════════════
   code-quality:
@@ -81,28 +82,24 @@ jobs:
 
     steps:
       - name: Checkout source code
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          # Full history needed for accurate SonarQube blame data
+          # Shallow clones disabled for better relevancy of SonarQube analysis
           fetch-depth: 0
 
       - name: SonarQube Scan
-        uses: sonarsource/sonarqube-scan-action@v3
+        uses: SonarSource/sonarqube-scan-action@7006c4492b2e0ee0f816d36501671557c97f5995 # v8.1.0
         with:
+          # sonar-project.properties in task-5-cicd/ carries projectKey=Rlogical
+          # and all source/exclusion settings — no -D flags needed here
           projectBaseDir: task-5-cicd
-          args: >
-            -Dsonar.projectKey=nodejs-todo-app
-            -Dsonar.projectName=nodejs-todo-app
-            -Dsonar.sources=src
-            -Dsonar.tests=spec
-            -Dsonar.exclusions=node_modules/**,src/static/**
         env:
           # Stored as GitHub Actions secrets — never hard-coded here
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
       - name: SonarQube Quality Gate check
-        uses: sonarsource/sonarqube-quality-gate-action@v1
+        uses: SonarSource/sonarqube-quality-gate-action@cf038b0e0cdecfa9e56c198bbb7d21d751d62c3b # v1.2.0
         timeout-minutes: 5
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
