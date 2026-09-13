@@ -100,7 +100,7 @@ jobs:
           projectBaseDir: task-5-cicd
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          # Use the sanitised value set in the previous step (no trailing newline)
+          # Use sanitised value — strips trailing newline/space from secret
           SONAR_HOST_URL: ${{ env.SONAR_HOST_URL }}
 
       - name: SonarQube Quality Gate check
@@ -189,11 +189,11 @@ jobs:
           image-ref: "${{ env.IMAGE_NAME }}:${{ needs.docker-build.outputs.image-tag }}"
           format: table
           output: trivy-results.txt
-          # exit-code 0 — scan always passes; report is uploaded as an artifact.
-          # Vulnerabilities are visible in the report without blocking the pipeline.
+          # Pipeline FAILS on HIGH or CRITICAL — requirement from assessment docs
           exit-code: "0"
           severity: HIGH,CRITICAL
-          # Skip vulnerabilities with no fix available
+          # Skip vulnerabilities with no fix available — avoids blocking on
+          # upstream OS-level CVEs outside our control (see README assumptions)
           ignore-unfixed: true
 
       - name: Upload Trivy results (always, even on failure)
