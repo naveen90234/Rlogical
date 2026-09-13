@@ -87,9 +87,10 @@ jobs:
           # Shallow clones disabled for better relevancy of SonarQube analysis
           fetch-depth: 0
 
-      - name: Sanitise SONAR_HOST_URL (strip trailing whitespace/newline from secret)
+      - name: Sanitise SONAR_HOST_URL (strip trailing newline/CR from secret)
         run: |
-          CLEAN_URL=$(echo "${{ secrets.SONAR_HOST_URL }}" | tr -d '[:space:]')
+          # Use printf to avoid shell adding its own newline, then strip CR+LF only
+          CLEAN_URL=$(printf '%s' "${{ secrets.SONAR_HOST_URL }}" | sed 's/[[:space:]]*$//')
           echo "SONAR_HOST_URL=${CLEAN_URL}" >> "$GITHUB_ENV"
 
       - name: SonarQube Scan
@@ -100,7 +101,7 @@ jobs:
           projectBaseDir: task-5-cicd
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          # Use sanitised value — strips trailing newline/space from secret
+          # Use env var written above — trailing newline stripped
           SONAR_HOST_URL: ${{ env.SONAR_HOST_URL }}
 
       - name: SonarQube Quality Gate check
