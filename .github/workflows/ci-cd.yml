@@ -77,16 +77,19 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Override SONAR_HOST_URL at process level
+        # The self-hosted runner persists env vars from previous runs.
+        # Write a clean value to GITHUB_ENV so it takes precedence over
+        # any system-level SONAR_HOST_URL that has a trailing newline.
+        run: echo "SONAR_HOST_URL=http://3.106.56.33:9000" >> "$GITHUB_ENV"
+
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@7006c4492b2e0ee0f816d36501671557c97f5995 # v8.1.0
         with:
           projectBaseDir: task-5-cicd
-          # Pass host URL as -D arg — highest precedence, overrides env var
-          # sonar.host.url also set in sonar-project.properties as backup
           args: -Dsonar.host.url=http://3.106.56.33:9000
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          # Set to same clean value to prevent action from injecting the secret
           SONAR_HOST_URL: http://3.106.56.33:9000
 
       - name: SonarQube Quality Gate check
