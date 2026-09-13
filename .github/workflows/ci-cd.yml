@@ -75,41 +75,32 @@ jobs:
   # Secrets required: SONAR_TOKEN, SONAR_HOST_URL
   # ═══════════════════════════════════════════════════════════════════════════
   code-quality:
-    name: "Stage 2 — Code Quality (SonarQube)"
-    runs-on: [ubuntu, ec2, rlogical]
-    environment: dev
-    needs: prepare
+  name: "Stage 2 — Code Quality (SonarQube)"
+  runs-on: [ubuntu, ec2, rlogical]
+  environment: dev
+  needs: prepare
 
-    steps:
-      - name: Checkout source code
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        with:
-          # Shallow clones disabled for better relevancy of SonarQube analysis
-          fetch-depth: 0
+  steps:
+    - name: Checkout source code
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      with:
+        fetch-depth: 0
 
-      - name: Sanitise SONAR_HOST_URL (strip trailing newline stored in secret)
-        # GitHub Actions expands secrets before the shell runs, so shell-based
-        # trimming does not work — the newline is already embedded in the value.
-        # Python strips it safely before writing to GITHUB_ENV.
-        env:
-          RAW_SONAR_URL: ${{ secrets.SONAR_HOST_URL }}
-        run: |
-          python3 -c "
-          import os, re
-          raw = os.environ['RAW_SONAR_URL']
-          clean = raw.strip()
-          with open(os.environ['GITHUB_ENV'], 'a') as f:
-              f.write(f'SONAR_HOST_URL={clean}\n')
-          "
+    - name: SonarQube Scan
+      uses: SonarSource/sonarqube-scan-action@7006c4492b2e0ee0f816d36501671557c97f5995
+      with:
+        projectBaseDir: task-5-cicd
+      env:
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
-      - name: SonarQube Scan
-        uses: SonarSource/sonarqube-scan-action@7006c4492b2e0ee0f816d36501671557c97f5995 # v8.1.0
-        with:
-          # sonar-project.properties in task-5-cicd/ carries projectKey=Rlogical
-          projectBaseDir: task-5-cicd
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ env.SONAR_HOST_URL }}
+    - name: SonarQube Quality Gate check
+      uses: SonarSource/sonarqube-quality-gate-action@cf038b0e0cdecfa9e56c198bbb7d21d751d62c3b
+      timeout-minutes: 5
+      env:
+        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
 
       - name: SonarQube Quality Gate check
         uses: SonarSource/sonarqube-quality-gate-action@cf038b0e0cdecfa9e56c198bbb7d21d751d62c3b # v1.2.0
