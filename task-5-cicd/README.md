@@ -1,55 +1,107 @@
 # Task 5 — GitHub Actions CI/CD Pipeline
 
-## Overview
+## Application Overview
 
-The pipeline is defined in `github-actions.yml` and implements a 7-stage CI/CD workflow for a Node.js application. It triggers on pushes and pull requests to `main` and `develop` branches.
+This is a Node.js Express todo-list application with the following structure:
+
+```
+task-5-cicd/
+├── src/
+│   ├── index.js              # Express app entry point (port 3000)
+│   ├── persistence/          # SQLite (default) and Postgres adapters
+│   └── routes/               # GET/POST/PUT/DELETE /items handlers
+├── spec/                     # Jest test suites
+├── Dockerfile                # Multi-stage production image
+├── .dockerignore
+├── package.json              # node:20, express, sqlite3, pg, jest
+└── README.md                 # This file
+```
+
+The pipeline workflow lives at:
+
+```
+.github/workflows/ci-cd.yml
+```
+
+---
+
+## Pipeline Scope — Important
+
+The pipeline is **scoped exclusively to this directory**.  
+It triggers **only** when files inside `task-5-cicd/` are changed.  
+Changes to `task-1-kubernetes/`, `task-2-nginx/`, `task-3-docker/`, `task-4-backup/`, or `evidence/` will **not** trigger this pipeline.
+
+This is enforced in the workflow via:
+
+```yaml
+on:
+  push:
+    paths:
+      - "task-5-cicd/**"
+  pull_request:
+    paths:
+      - "task-5-cicd/**"
+```
 
 ---
 
 ## Pipeline Stages
 
-| Stage | Name | Description |
-|---|---|---|
-| 1 | App Preparation | Checkout, Node.js setup, `npm ci`, run tests |
-| 2 | Code Quality | SonarQube static analysis + Quality Gate |
-| 3 | Docker Build | Build image, tag with short Git SHA, cache layers |
-| 4 | Security Scan | Trivy scan — fails on HIGH/CRITICAL vulnerabilities |
-| 5 | Push to ECR | Authenticate via OIDC, push to AWS ECR |
-| 6 | Deploy to EC2 | SSH into EC2, pull image, restart container |
-| 7 | Health Check | HTTP check with retries against deployed app |
+| # | Stage | Job | Runs On |
+|---|---|---|---|
+| 1 | App Preparation | `prepare` | All branches |
+| 2 | Code Quality (SonarQube) | `code-quality` | All branches |
+| 3 | Docker Build | `docker-build` | All branches |
+| 4 | Security Scan (Trivy) | `security-scan` | All branches |
+| 5 | Push to AWS ECR | `push-to-ecr` | `main` push only |
+| 6 | Deploy to EC2 | `deploy` | `main` push only |
+| 7 | Health Check | `health-check` | `main` push only |
 
-Stages 5–7 run **only on pushes to `main`**, not on pull requests.
+Stages 5–7 are gated behind:
+
+```yaml
+if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+```
+
+PRs and `develop` branch pushes run only stages 1–4 (build, test, scan) without deploying.
 
 ---
 
 ## Required GitHub Actions Secrets
 
-Configure these under **Settings → Secrets and variables → Actions** in your GitHub repository. Never commit these values.
+Configure all of these under **Settings → Secrets and variables → Actions** in your GitHub repository. Never commit real values.
 
-| Secret Name | Description |
-|---|---|
-| `AWS_REGION` | AWS region (e.g. `us-east-1`) |
-| `AWS_ROLE_ARN` | ARN of the IAM Role for OIDC federation (e.g. `arn:aws:iam::123456789:role/github-actions-role`) |
-| `ECR_REPOSITORY` | ECR repository name (e.g. `nodejs-app`) |
-| `EC2_HOST` | Public IP or DNS of the EC2 deployment server |
-| `EC2_USER` | SSH username (e.g. `ubuntu`) |
-| `EC2_SSH_PRIVATE_KEY` | PEM-format private key for SSH access to EC2 |
-| `SONAR_TOKEN` | SonarQube authentication token |
-| `SONAR_HOST_URL` | SonarQube server URL (e.g. `https://sonar.yourcompany.com`) |
+| Secret | Description | Example |
+|---|---|---|
+| `AWS_ROLE_ARN` | IAM Role ARN for GitHub OIDC federation | `arn:aws:iam::123456789012:role/github-actions-role` |
+| `AWS_REGION` | AWS region | `us-east-1` |
+| `ECR_REPOSITORY` | ECR repository name | `nodejs-todo-app` |
+| `EC2_HOST` | EC2 public IP or DNS hostname | `54.123.45.67` |
+| `EC2_USER` | SSH login username on the EC2 server | `ubuntu` |
+| `EC2_SSH_PRIVATE_KEY` | PEM-format private key for SSH | *(full key content)* |
+| `SONAR_TOKEN` | SonarQube authentication token | *(generated in SonarQube)* |
+| `SONAR_HOST_URL` | SonarQube server URL | `https://sonar.yourcompany.com` |
 
 ---
 
-## AWS Authentication — OIDC (No Long-Lived Keys)
+## AWS Authentication — GitHub OIDC (No Long-Lived Keys)
 
-The pipeline uses **GitHub OIDC federation** instead of storing AWS Access Key / Secret Key as secrets. This is the recommended AWS approach.
+The pipeline uses **GitHub OIDC federation** to assume an IAM Role. No `AWS_ACCESS_KEY_ID` or `AWS_SECRET_ACCESS_KEY` are stored anywhere.
 
-### Setup Steps
+### Step 1 — Create the OIDC Identity Provider in AWS IAM
 
-1. **Create an OIDC identity provider in IAM:**
-   - Provider URL: `https://token.actions.githubusercontent.com`
-   - Audience: `sts.amazonaws.com`
+```bash
+aws iam create-open-id-connect-provider \
+  --url https://token.actions.githubusercontent.com \
+  --client-id-list sts.amazonaws.com \
+  --thumbprint-list 6938fd4d98bab03faadb97b34396831e3780aea1
+```
 
-2. **Create an IAM Role** with a trust policy for your repository:
+Or via Console: **IAM → Identity providers → Add provider → OpenID Connect**
+- Provider URL: `https://token.actions.githubusercontent.com`
+- Audience: `sts.amazonaws.com`
+
+### Step 2 — Create the IAM Role with Trust Policy
 
 ```json
 {
@@ -74,85 +126,200 @@ The pipeline uses **GitHub OIDC federation** instead of storing AWS Access Key /
 }
 ```
 
-3. **Attach the following permissions** to the IAM Role:
-   - `AmazonEC2ContainerRegistryPowerUser` — for ECR push
-   - `ecr:GetAuthorizationToken` — for ECR login
+Replace `<ACCOUNT_ID>`, `<YOUR_GITHUB_ORG>`, and `<YOUR_REPO>` with real values.
 
-4. **Store the Role ARN** as the `AWS_ROLE_ARN` secret.
+### Step 3 — Attach Permissions to the Role
+
+Attach the AWS managed policy:
+- `AmazonEC2ContainerRegistryPowerUser` — allows push to ECR
+
+Also attach this inline policy for ECR login from the EC2 server:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "ecr:GetAuthorizationToken",
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+### Step 4 — Store the Role ARN as a Secret
+
+Set `AWS_ROLE_ARN` = `arn:aws:iam::<ACCOUNT_ID>:role/<ROLE_NAME>` in GitHub Secrets.
+
+---
+
+## Docker Workflow (Local)
+
+Use these commands to build and test the image locally before pushing.
+
+```bash
+# Build image from inside the task-5-cicd/ directory
+cd task-5-cicd
+
+docker build -t nodejs-todo-app:local .
+
+# Run container
+docker run -d \
+  --name nodejs-todo-app \
+  -p 3000:3000 \
+  nodejs-todo-app:local
+
+# Verify it is running
+docker ps --filter "name=nodejs-todo-app"
+
+# Check logs
+docker logs nodejs-todo-app
+
+# Test the app
+curl http://localhost:3000/
+curl http://localhost:3000/items
+
+# Open a shell inside the container
+docker exec -it nodejs-todo-app sh
+
+# Stop and clean up
+docker stop nodejs-todo-app
+docker rm nodejs-todo-app
+docker rmi nodejs-todo-app:local
+```
+
+---
+
+## Running Tests Locally
+
+```bash
+cd task-5-cicd
+npm ci
+npm test
+```
+
+Jest will run all test files under `spec/`. The app uses SQLite in test mode — no database setup needed.
+
+---
+
+## Triggering the Pipeline
+
+### Trigger CI only (stages 1–4, no deploy)
+
+```bash
+git checkout develop
+# make a change inside task-5-cicd/
+git add task-5-cicd/src/routes/addItem.js
+git commit -m "feat: update addItem route"
+git push origin develop
+# Pipeline runs stages 1-4 only
+```
+
+### Trigger full pipeline including deploy (stages 1–7)
+
+```bash
+git checkout main
+git merge develop
+git push origin main
+# Pipeline runs all 7 stages
+```
+
+### What does NOT trigger the pipeline
+
+```bash
+# Changing Kubernetes manifests — pipeline does NOT run
+git add task-1-kubernetes/deployment.yaml
+git commit -m "chore: update k8s resource limits"
+git push origin main
+# No pipeline triggered — paths filter excludes this
+```
 
 ---
 
 ## Vulnerability Handling — Trivy (Stage 4)
 
 ### Pipeline Behaviour
-- `exit-code: "1"` — pipeline **fails** if HIGH or CRITICAL vulnerabilities are found.
-- `ignore-unfixed: true` — vulnerabilities with no available fix are ignored to avoid blocking on issues outside your control.
-- Scan results are uploaded as a pipeline artifact (`trivy-scan-results`) and retained for 7 days.
+
+| Setting | Value | Reason |
+|---|---|---|
+| `exit-code` | `1` | Pipeline **fails** on HIGH or CRITICAL findings |
+| `severity` | `HIGH,CRITICAL` | MEDIUM and below do not block the pipeline |
+| `ignore-unfixed` | `true` | CVEs with no available fix are excluded |
 
 ### Assumptions
 
 | Area | Assumption |
 |---|---|
-| Base image | `node:20-alpine` is used to minimise surface area. Some OS-level CVEs may exist with no upstream fix — these are excluded via `ignore-unfixed: true`. |
-| Dependencies | Application `npm` dependencies are scanned. Developers are responsible for keeping dependencies up to date. |
-| Accepted risk | If a HIGH/CRITICAL CVE has no fix available and blocks the pipeline, it can be suppressed via a `.trivyignore` file with documented justification. |
-| Production | In production, consider adding `--exit-code 0` for MEDIUM and below, and alerting only (not blocking) on MEDIUM vulnerabilities. |
+| Base image | `node:20-alpine` minimises OS-level CVEs. Some unfixed CVEs may exist in the Alpine base — excluded by `ignore-unfixed: true` |
+| npm dependencies | Application dependencies are scanned. Developers must keep dependencies up to date via `npm audit` |
+| Accepted risk | `ignore-unfixed: true` is set to avoid blocking deployments on CVEs where no upstream fix exists |
+| False positives | If a HIGH/CRITICAL CVE is a false positive or accepted risk, add the CVE ID to a `.trivyignore` file in `task-5-cicd/` with a documented justification comment |
 
-### Adding Vulnerability Exceptions
+### Adding a Vulnerability Exception
 
-Create a `.trivyignore` file in the repository root:
+Create `task-5-cicd/.trivyignore`:
 
 ```
-# Format: CVE-ID (one per line)
-# Add a comment explaining why this is accepted
-CVE-2023-XXXXX  # No fix available — base image vendor tracking
+# CVE-YYYY-XXXXX: No fix available in upstream Alpine — tracked in issue #123
+CVE-2023-XXXXX
+```
+
+### Trivy Scan Results
+
+Results are uploaded as a pipeline artifact named `trivy-scan-results` and retained for 7 days. Download from the GitHub Actions run summary page.
+
+---
+
+## EC2 Server Prerequisites
+
+Before the deploy stage can succeed, the EC2 instance must have:
+
+| Requirement | Details |
+|---|---|
+| Docker | Installed and running (`sudo systemctl status docker`) |
+| AWS CLI v2 | Installed (`aws --version`) |
+| IAM Instance Profile | Attached with `ecr:GetAuthorizationToken` and `ecr:BatchGetImage` permissions |
+| Security Group | Inbound TCP port `3000` open for the health check |
+| SSH access | Public key of `EC2_SSH_PRIVATE_KEY` added to `~/.ssh/authorized_keys` |
+
+### EC2 IAM Instance Profile Policy
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ecr:GetAuthorizationToken",
+        "ecr:BatchGetImage",
+        "ecr:GetDownloadUrlForLayer"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
 ```
 
 ---
 
 ## Image Tagging Strategy
 
-| Tag | Value | Used For |
+| Tag | Format | Purpose |
 |---|---|---|
-| Short SHA | `a1b2c3d` | Unique, traceable per-commit identifier |
-| `latest` | Always updated | Convenience tag for pulling most recent build |
+| Versioned | `<short-sha>` (e.g. `a1b2c3d`) | Unique, traceable per-commit identifier |
+| `latest` | Always updated on `main` | Convenience tag for pulling most recent build |
 
-The short SHA tag is generated as `${GITHUB_SHA::7}` and passed between jobs via `outputs`.
-
----
-
-## EC2 Deployment Details
-
-- The deploy job SSHs into the EC2 instance using the `appleboy/ssh-action`.
-- It authenticates Docker to ECR using `aws ecr get-login-password`.
-- It stops and removes the existing container before starting the new one.
-- The container runs with `--restart unless-stopped` to survive server reboots.
-- Port `3000` is mapped to the host.
-
-### EC2 Prerequisites
-
-The EC2 instance must have:
-- Docker installed and running
-- AWS CLI installed
-- An IAM Instance Profile with `ecr:GetAuthorizationToken` and `ecr:BatchGetImage` permissions
-- Port 3000 open in the Security Group (for the health check)
-- The SSH public key of `EC2_SSH_PRIVATE_KEY` in `~/.ssh/authorized_keys`
-
----
-
-## Pipeline Trigger Behaviour
-
-| Event | Stages Run |
-|---|---|
-| PR to `main` | Stages 1–4 (prepare, quality, build, scan) |
-| Push to `main` | All stages 1–7 |
-| Push to `develop` | Stages 1–4 |
+The short SHA is generated as `${GITHUB_SHA::7}` and passed between jobs via `outputs`.
 
 ---
 
 ## Assumptions
 
-- The Node.js application entry point is `src/index.js`. Adjust `CMD` in the Dockerfile if different.
-- SonarQube is self-hosted or SonarCloud. The `SONAR_HOST_URL` secret handles both.
-- The EC2 instance is a single server (no load balancer). For HA deployments, replace the SSH deploy step with ECS, EKS, or an ASG rolling update.
-- The application exposes a root path (`/`) that returns a 2xx response for the health check.
+1. The application entry point is `src/index.js` and it listens on port `3000`.
+2. SQLite is used by default (no external database required for tests or basic runs). Set the `POSTGRES_*` environment variables to switch to Postgres.
+3. The `npm test` script runs Jest — all spec files are under `spec/`.
+4. SonarQube is either self-hosted or SonarCloud. The `SONAR_HOST_URL` secret handles both.
+5. The EC2 deployment target is a single server. For HA deployments replace the SSH step with ECS, EKS, or an Auto Scaling Group rolling update.
+6. The application root path `/` returns HTTP 2xx — this is what the health check polls.

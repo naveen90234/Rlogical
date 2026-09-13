@@ -1,0 +1,14 @@
+{
+  "Rules": [
+    {
+      "ID": "DeleteMySQLBackupsAfter7Days",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": "mysql-backups/"
+      },
+      "Expiration": {
+        "Days": 7
+      }
+    }
+  ]
+}
