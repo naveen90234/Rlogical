@@ -18,6 +18,7 @@ on:
     paths:
       - "task-5-cicd/**"
       - ".github/**"
+
   pull_request:
     branches:
       - dev
@@ -65,12 +66,13 @@ jobs:
         run: npm test
         env:
           NODE_ENV: test
+
+
   # ═══════════════════════════════════════════════════════════════════════════
   # STAGE 2 — Code Quality (SonarQube)
-  # NOTE: SonarQube steps are temporarily disabled due to secret trailing-
-  # newline issue on the self-hosted runner. Will be re-enabled once
-  # SONAR_HOST_URL and SONAR_TOKEN secrets are re-entered cleanly in GitHub.
-  # projectKey: Rlogical — set in task-5-cicd/sonar-project.properties
+  #
+  # SonarQube is temporarily disabled because of the previous secret
+  # trailing-newline issue.
   # ═══════════════════════════════════════════════════════════════════════════
   code-quality:
     name: "Stage 2 — Code Quality (SonarQube)"
@@ -86,14 +88,14 @@ jobs:
 
       - name: SonarQube analysis skipped
         run: |
-          echo "SonarQube scan is temporarily commented out."
-          echo "Reason: SONAR_HOST_URL / SONAR_TOKEN secrets have trailing"
-          echo "newline on the self-hosted runner causing Malformed URL error."
+          echo "SonarQube scan is temporarily disabled."
+          echo "Reason: SONAR_HOST_URL / SONAR_TOKEN secrets previously"
+          echo "contained a trailing newline on the self-hosted runner."
           echo "Re-enter both secrets cleanly in GitHub to re-enable."
           echo "projectKey : Rlogical"
           echo "SonarQube URL : http://3.106.56.33:9000"
-
-      # ── Re-enable the steps below once secrets are clean ──────────────────
+      # ── Re-enable these steps once SonarQube secrets are clean ────────────
+      #
       # - name: SonarQube Scan
       #   uses: SonarSource/sonarqube-scan-action@7006c4492b2e0ee0f816d36501671557c97f5995
       #   with:
@@ -109,6 +111,7 @@ jobs:
       #   env:
       #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
       #     SONAR_HOST_URL: http://3.106.56.33:9000
+
 
   # ═══════════════════════════════════════════════════════════════════════════
   # STAGE 3 — Docker Build
@@ -232,6 +235,14 @@ jobs:
       - name: Load Docker image
         run: docker load -i /tmp/docker-image.tar
 
+      - name: Generate image tag
+        id: image-tag
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          echo "image-tag=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "Image tag: ${SHORT_SHA}"
+      # ── Enable this if the runner does not already have AWS credentials ──
+      #
       # - name: Configure AWS credentials via OIDC
       #   uses: aws-actions/configure-aws-credentials@v4
       #   with:
@@ -246,8 +257,7 @@ jobs:
         run: |
           ECR_REGISTRY="${{ steps.ecr-login.outputs.registry }}"
           ECR_REPO="${{ secrets.ECR_REPOSITORY }}"
-          IMAGE_TAG="latest"
-
+          IMAGE_TAG="${{ steps.image-tag.outputs.image-tag }}"
           VERSIONED="${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}"
           LATEST="${ECR_REGISTRY}/${ECR_REPO}:latest"
           echo "[INFO] Tagging image..."
@@ -401,4 +411,15 @@ jobs:
             fi
 
           done
-          echo "[INFO] Health check passed. Application is live at ${URL}"
+
+          echo "[ERROR] Health check failed after ${MAX_RETRIES} attempts."
+
+          echo "[INFO] Docker container status:"
+          docker ps -a \
+            --filter "name=nodejs-todo-app-dev" \
+            --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+
+          echo "[INFO] Container logs:"
+          docker logs --tail 100 nodejs-todo-app-dev || true
+
+          exit 1
