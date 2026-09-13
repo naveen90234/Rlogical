@@ -83,6 +83,14 @@ jobs:
         # any system-level SONAR_HOST_URL that has a trailing newline.
         run: echo "SONAR_HOST_URL=http://3.106.56.33:9000" >> "$GITHUB_ENV"
 
+      - name: Sanitise SONAR_TOKEN (strip trailing newline from secret)
+        env:
+          RAW_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          printf '%s' "${RAW_TOKEN}" | tr -d '\n\r' > /tmp/sonar_token
+          echo "SONAR_TOKEN_CLEAN=$(cat /tmp/sonar_token)" >> "$GITHUB_ENV"
+          rm -f /tmp/sonar_token
+
       - name: SonarQube Scan
         continue-on-error: true
         uses: SonarSource/sonarqube-scan-action@7006c4492b2e0ee0f816d36501671557c97f5995 # v8.1.0
@@ -90,7 +98,7 @@ jobs:
           projectBaseDir: task-5-cicd
           args: -Dsonar.host.url=http://3.106.56.33:9000
         env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_TOKEN: ${{ env.SONAR_TOKEN_CLEAN }}
           SONAR_HOST_URL: http://3.106.56.33:9000
 
       - name: SonarQube Quality Gate check
@@ -98,7 +106,7 @@ jobs:
         uses: SonarSource/sonarqube-quality-gate-action@cf038b0e0cdecfa9e56c198bbb7d21d751d62c3b # v1.2.0
         timeout-minutes: 5
         env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_TOKEN: ${{ env.SONAR_TOKEN_CLEAN }}
           SONAR_HOST_URL: http://3.106.56.33:9000
 
   # ═══════════════════════════════════════════════════════════════════════════
