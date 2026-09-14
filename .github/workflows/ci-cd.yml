@@ -1,6 +1,6 @@
 name: CI/CD Pipeline — task-5-cicd
 
-# ────────────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────────────
 # IMPORTANT: This pipeline is scoped exclusively to the task-5-cicd/ directory.
 # Changes to any other folder (task-1-kubernetes/, task-2-nginx/, etc.)
 # will NOT trigger this workflow.
